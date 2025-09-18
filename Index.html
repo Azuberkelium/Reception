@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Emotions</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .emotion-btn {
+            @apply flex flex-col items-center justify-center p-4 m-2 md:p-6 md:m-4 bg-white rounded-2xl shadow-lg transition-all duration-300 transform active:scale-95 hover:shadow-xl focus:outline-none focus:ring-4 focus:ring-blue-500/50;
+        }
+        .emotion-image {
+            @apply w-24 h-24 md:w-32 md:h-32 mb-2;
+        }
+        .emotion-label {
+            @apply text-lg md:text-xl font-semibold text-gray-800 text-center;
+        }
+        .log-list {
+            list-style: none;
+            padding: 0;
+        }
+        .log-item {
+            @apply p-3 mb-2 rounded-lg text-lg text-gray-700 bg-white shadow;
+        }
+        .joke-container {
+            @apply flex flex-col items-center justify-center p-6 md:p-8 bg-white rounded-3xl shadow-xl border-4 border-transparent min-h-[150px] cursor-pointer transition-all duration-300 transform hover:shadow-2xl active:scale-[0.99];
+        }
+        .joke-text, .fact-text {
+            @apply text-2xl md:text-3xl font-bold text-center text-gray-800;
+        }
+        .get-new-joke-btn, .get-new-fact-btn, .show-answer-btn {
+            @apply mt-4 px-6 py-3 bg-blue-500 text-white font-bold rounded-full shadow-lg hover:bg-blue-600 transition-colors duration-300;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8 flex flex-col items-center min-h-screen">
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : undefined;
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // UI Elements
+        const emotionsContainer = document.getElementById('emotions-container');
+        const resultContainer = document.getElementById('result-container');
+        const emotionDisplay = document.getElementById('emotion-display');
+        const emotionText = document.getElementById('emotion-text');
+        const logList = document.getElementById('log-list');
+        const clearLogBtn = document.getElementById('clear-log-btn');
+        const noLogMessage = document.getElementById('no-log-message');
+        const loadingMessage = document.getElementById('loading-message');
+        const userIdDisplay = document.getElementById('user-id');
+
+        let userId = null;
+        let emotionLogCollection;
+
+        // Function to update the log UI
+        function updateLogUI(logItems) {
+            logList.innerHTML = '';
+            if (logItems.length > 0) {
+                noLogMessage.classList.add('hidden');
+                logItems.forEach(logItem => {
+                    const li = document.createElement('li');
+                    li.classList.add('log-item');
+                    li.textContent = `${logItem.emoji} ${logItem.text} at ${logItem.time}`;
+                    logList.appendChild(li);
+                });
+            } else {
+                noLogMessage.classList.remove('hidden');
+            }
+        }
+
+        // Listen for changes in authentication state
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                userIdDisplay.textContent = `User ID: ${userId}`;
+                emotionLogCollection = collection(db, `artifacts/${appId}/public/data/emotion_logs`);
+
+                // Set up real-time listener for the log
+                onSnapshot(emotionLogCollection, (querySnapshot) => {
+                    loadingMessage.classList.add('hidden');
+                    const logItems = [];
+                    querySnapshot.forEach((doc) => {
+                        const data = doc.data();
+                        logItems.push({
+                            id: doc.id,
+                            emoji: data.emoji,
+                            text: data.text,
+                            timestamp: data.timestamp,
+                            time: new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        });
+                    });
+
+                    // Sort the log items by timestamp, newest first
+                    logItems.sort((a, b) => b.timestamp - a.timestamp);
+                    updateLogUI(logItems);
+                });
+
+            } else {
+                // Sign in anonymously if no token is provided
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                    loadingMessage.textContent = "Error loading. Please try again.";
+                }
+            }
+        });
+
+        // Event listener for emotion buttons
+        emotionsContainer.addEventListener('click', async (event) => {
+            const button = event.target.closest('.emotion-btn');
+            if (button && userId) {
+                const emotion = button.getAttribute('data-emotion');
+                const emoji = button.getAttribute('data-emoji');
+                const text = button.querySelector('.emotion-label').textContent;
+
+                // Update the result display
+                emotionDisplay.textContent = emoji;
+                emotionText.textContent = text;
+                resultContainer.classList.remove('hidden');
+
+                // Animate the border
+                resultContainer.classList.add('border-blue-500');
+                setTimeout(() => {
+                    resultContainer.classList.remove('border-blue-500');
+                }, 1000);
+
+                // Add a new document to the Firestore collection
+                try {
+                    await addDoc(emotionLogCollection, {
+                        userId: userId,
+                        emotion: emotion,
+                        emoji: emoji,
+                        text: text,
+                        timestamp: Date.now()
+                    });
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                }
+            }
+        });
+
+        // Event listener for the "Clear Log" button
+        clearLogBtn.addEventListener('click', async () => {
+            console.log("Clearing all emotions from the log...");
+            // Get all documents and delete them one by one
+            const q = query(emotionLogCollection);
+            const querySnapshot = await getDocs(q);
+            querySnapshot.forEach(async (d) => {
+                await deleteDoc(d.ref);
+            });
+            console.log("Log has been cleared.");
+        });
+
+        // --- Knock-Knock Joke Section Logic ---
+        const jokes = [
+            ["Knock, knock.", "Who's there?", "Lettuce.", "Lettuce who?", "Lettuce in, it's freezing out here!"],
+            ["Knock, knock.", "Who's there?", "Cows go.", "Cows go who?", "No, cows go 'moo'!"],
+            ["Knock, knock.", "Who's there?", "A little old lady.", "A little old lady who?", "I didn't know you could yodel!"],
+            ["Knock, knock.", "Who's there?", "Tank.", "Tank who?", "You're welcome!"],
+            ["Knock, knock.", "Who's there?", "Atch.", "Atch who?", "Bless you!"],
+        ];
+
+        const jokeContainer = document.getElementById('joke-container');
+        const jokeTextDisplay = document.getElementById('joke-text');
+        const newJokeBtn = document.getElementById('new-joke-btn');
+
+        let currentJokeIndex = -1;
+        let currentLineIndex = 0;
+
+        function displayNextJokeLine() {
+            if (currentJokeIndex === -1) {
+                // Initial state
+                jokeTextDisplay.textContent = "Tap here for a joke!";
+            } else if (currentLineIndex < jokes[currentJokeIndex].length) {
+                // Display the next line
+                jokeTextDisplay.textContent = jokes[currentJokeIndex][currentLineIndex];
+                currentLineIndex++;
+            } else {
+                // Joke is finished, prompt for a new one
+                jokeTextDisplay.textContent = "Got any more? Tap for a new joke!";
+                currentJokeIndex = -1; // Reset to get a new joke on the next tap
+            }
+        }
+
+        function getNewJoke() {
+            // Get a new random joke index, making sure it's not the same as the last one
+            let newIndex;
+            do {
+                newIndex = Math.floor(Math.random() * jokes.length);
+            } while (newIndex === currentJokeIndex);
+            
+            currentJokeIndex = newIndex;
+            currentLineIndex = 0;
+            displayNextJokeLine(); // Display the first line
+        }
+
+        // Event listeners for the jokes
+        jokeContainer.addEventListener('click', () => {
+            if (currentJokeIndex === -1) {
+                getNewJoke();
+            } else {
+                displayNextJokeLine();
+            }
+        });
+        
+        newJokeBtn.addEventListener('click', getNewJoke);
+        
+        // Initial call
+        displayNextJokeLine();
+
+        // --- Silly Facts & Questions Section Logic ---
+        const factsAndQuestions = [
+            { type: 'fact', text: 'A group of flamingos is called a "flamboyance".' },
+            { type: 'question', text: 'How many stomachs does a cow have?', answer: 'Cows have four stomachs!' },
+            { type: 'fact', text: 'A snail can sleep for up to three years.' },
+            { type: 'question', text: 'What is a baby owl called?', answer: 'A baby owl is called an "owlet".' },
+            { type: 'fact', text: 'An octopus has three hearts.' },
+            { type: 'question', text: 'What do you call a group of kittens?', answer: 'A group of kittens is called a "kindle".' },
+            { type: 'fact', text: 'The average person walks the equivalent of five times around the world in their lifetime.' },
+            { type: 'question', text: 'Why is the sky blue?', answer: 'The air scatters blue light more than other colors.' },
+            { type: 'fact', text: 'A tiger\'s stripes are not just on its fur, they are also on its skin!' },
+        ];
+        
+        const factsContainer = document.getElementById('facts-container');
+        const factTextDisplay = document.getElementById('fact-text');
+        const showAnswerBtn = document.getElementById('show-answer-btn');
+        const newFactBtn = document.getElementById('new-fact-btn');
+
+        let currentFactIndex = -1;
+        
+        function getNewFactOrQuestion() {
+            let newIndex;
+            do {
+                newIndex = Math.floor(Math.random() * factsAndQuestions.length);
+            } while (newIndex === currentFactIndex);
+            
+            currentFactIndex = newIndex;
+            const item = factsAndQuestions[currentFactIndex];
+            
+            factTextDisplay.textContent = item.text;
+            
+            if (item.type === 'question') {
+                showAnswerBtn.classList.remove('hidden');
+                showAnswerBtn.onclick = () => {
+                    factTextDisplay.textContent = item.answer;
+                    showAnswerBtn.classList.add('hidden');
+                };
+            } else {
+                showAnswerBtn.classList.add('hidden');
+            }
+        }
+        
+        newFactBtn.addEventListener('click', getNewFactOrQuestion);
+
+        // Initial call for the facts section
+        getNewFactOrQuestion();
+    </script>
+    
+    <div class="max-w-4xl w-full mx-auto">
+        <h1 class="text-3xl md:text-5xl font-extrabold text-center text-gray-900 mb-2 md:mb-4">How am I feeling?</h1>
+        <p class="text-xs md:text-sm text-center text-gray-500 mb-6 md:mb-12" id="user-id">Loading user ID...</p>
+        <p class="text-center text-gray-600 mb-8 md:mb-12 text-base md:text-lg">
+            Tap a picture to show how you feel.
+        </p>
+
+        <div id="emotions-container" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6">
+            <button class="emotion-btn" data-emotion="happy" data-emoji="😊">
+                <span class="emotion-image text-8xl">😊</span>
+                <span class="emotion-label">Happy</span>
+            </button>
+            <button class="emotion-btn" data-emotion="sad" data-emoji="😢">
+                <span class="emotion-image text-8xl">😢</span>
+                <span class="emotion-label">Sad</span>
+            </button>
+            <button class="emotion-btn" data-emotion="angry" data-emoji="😠">
+                <span class="emotion-image text-8xl">😠</span>
+                <span class="emotion-label">Angry</span>
+            </button>
+            <button class="emotion-btn" data-emotion="calm" data-emoji="😌">
+                <span class="emotion-image text-8xl">😌</span>
+                <span class="emotion-label">Calm</span>
+            </button>
+            <button class="emotion-btn" data-emotion="excited" data-emoji="🥳">
+                <span class="emotion-image text-8xl">🥳</span>
+                <span class="emotion-label">Excited</span>
+            </button>
+            <button class="emotion-btn" data-emotion="confused" data-emoji="😕">
+                <span class="emotion-image text-8xl">😕</span>
+                <span class="emotion-label">Confused</span>
+            </button>
+            <button class="emotion-btn" data-emotion="scared" data-emoji="😨">
+                <span class="emotion-image text-8xl">😨</span>
+                <span class="emotion-label">Scared</span>
+            </button>
+            <button class="emotion-btn" data-emotion="tired" data-emoji="🥱">
+                <span class="emotion-image text-8xl">🥱</span>
+                <span class="emotion-label">Tired</span>
+            </button>
+            <button class="emotion-btn" data-emotion="hungry" data-emoji="🤤">
+                <span class="emotion-image text-8xl">🤤</span>
+                <span class="emotion-label">Hungry</span>
+            </button>
+            <button class="emotion-btn" data-emotion="silly" data-emoji="😜">
+                <span class="emotion-image text-8xl">😜</span>
+                <span class="emotion-label">Silly</span>
+            </button>
+            <button class="emotion-btn" data-emotion="proud" data-emoji="🤩">
+                <span class="emotion-image text-8xl">🤩</span>
+                <span class="emotion-label">Proud</span>
+            </button>
+            <button class="emotion-btn" data-emotion="hurt" data-emoji="🤕">
+                <span class="emotion-image text-8xl">🤕</span>
+                <span class="emotion-label">Hurt</span>
+            </button>
+        </div>
+
+        <div id="result-container" class="mt-12 md:mt-16 bg-white rounded-3xl p-6 md:p-8 shadow-xl border-4 border-transparent hidden flex flex-col items-center min-h-[300px]">
+            <h2 class="text-2xl md:text-4xl font-bold text-gray-700 mb-4 md:mb-6 text-center">I am feeling...</h2>
+            <div id="emotion-display" class="text-9xl md:text-[10rem] animate-pulse"></div>
+            <div id="emotion-text" class="text-3xl md:text-5xl font-bold text-gray-800 mt-4 text-center"></div>
+        </div>
+
+        <div class="mt-12 md:mt-16 w-full max-w-2xl mx-auto">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl md:text-3xl font-bold text-gray-800">My Emotion Log</h2>
+                <button id="clear-log-btn" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-full transition-colors duration-300 shadow">
+                    Clear Log
+                </button>
+            </div>
+            <p id="loading-message" class="text-center text-gray-500">Loading your emotion log...</p>
+            <div class="bg-white rounded-2xl shadow-md p-4 md:p-6">
+                <ul id="log-list" class="log-list">
+                    <!-- Log entries will be added here -->
+                </ul>
+                <p id="no-log-message" class="text-gray-500 text-center mt-4 hidden">No emotions logged yet.</p>
+            </div>
+        </div>
+
+        <!-- New Section for Knock-Knock Jokes -->
+        <div class="mt-12 md:mt-16 w-full max-w-2xl mx-auto">
+            <h2 class="text-2xl md:text-3xl font-bold text-gray-800 mb-4 text-center">Knock-Knock Jokes!</h2>
+            <div id="joke-container" class="joke-container">
+                <p id="joke-text" class="joke-text">Tap here for a joke!</p>
+            </div>
+            <div class="flex justify-center">
+                <button id="new-joke-btn" class="get-new-joke-btn">Get a New Joke</button>
+            </div>
+        </div>
+
+        <!-- New Section for Silly Questions & Fun Facts -->
+        <div class="mt-12 md:mt-16 w-full max-w-2xl mx-auto">
+            <h2 class="text-2xl md:text-3xl font-bold text-gray-800 mb-4 text-center">Silly Questions & Fun Facts!</h2>
+            <div id="facts-container" class="joke-container">
+                <p id="fact-text" class="fact-text">Tap the button for a silly fact!</p>
+            </div>
+            <div class="flex justify-center">
+                <button id="show-answer-btn" class="show-answer-btn hidden">Show Answer</button>
+                <button id="new-fact-btn" class="get-new-fact-btn">Get a New Fact</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
